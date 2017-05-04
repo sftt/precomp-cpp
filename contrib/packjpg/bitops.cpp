@@ -3,924 +3,919 @@ This file contains special classes for bitwise
 reading and writing of arrays
 */
 
-#include <stdlib.h>
-#include <string.h>
-#include <fcntl.h>
 #include "bitops.h"
 
-#ifdef _MSC_VER // Changed by schnaader to enable compilation by MSVC
+#include <algorithm>
+#include <array>
+#include <cstdio>
+#include <stdlib.h>
+#include <vector>
+
+#if defined(_WIN32) || defined(WIN32)
+#include <fcntl.h>
 #include <io.h>
-#define setmode _setmode
 #endif
 
-#define BUFFER_SIZE 1024 * 1024
-
+#if (__cplusplus < 201402L) && (!defined(_MSC_VER) || _MSC_VER < 1800)
+namespace std {
+    template<typename T, typename... Ts>
+    std::unique_ptr<T> make_unique(Ts&&... params)
+    {
+        return std::unique_ptr<T>(new T(std::forward<Ts>(params)...));
+    }
+}
+#endif
 
 // special realloc with guaranteed free() of previous memory
-static inline void* frealloc( void* ptr, size_t size ) {
-	void* n_ptr = realloc( ptr, (size) ? size : 1 );
-	if ( n_ptr == NULL ) free( ptr );
-	return n_ptr;
+template <class T>
+static inline T* frealloc(T* ptr, size_t size) {
+    T* n_ptr = (T*)realloc(ptr, (size) ? size : 1);
+    if (n_ptr == nullptr) free(ptr);
+    return n_ptr;
 }
 
 
 /* -----------------------------------------------
-	constructor for abitreader class
-	----------------------------------------------- */	
-
-abitreader::abitreader( unsigned char* array, int size )
+    constructor for abitreader class
+   ----------------------------------------------- */
+abitreader::abitreader(unsigned char* array, int size)
 {
-	cbyte = 0;	
-	cbit = 8;
-	peof = 0;
-	eof = false;
-	
-	data = array;
-	lbyte = size;	
+    cbyte = 0;
+    cbit = 8;
+    peof_ = 0;
+    eof_ = false;
+
+    data = array;
+    lbyte = size;
 }
 
 /* -----------------------------------------------
-	destructor for abitreader class
-	----------------------------------------------- */	
-
-abitreader::~abitreader( void )
-{
-}
-
-/* -----------------------------------------------
-	reads n bits from abitreader
-	----------------------------------------------- */	
-
-unsigned int abitreader::read( int nbits )
-{
-	unsigned int retval = 0;
-	
-	// safety check for eof
-	if ( eof ) {
-		peof += nbits;
-		return 0;
-	}
-	
-	while ( nbits >= cbit ) {
-		nbits -= cbit;
-		retval |= ( RBITS( data[cbyte], cbit ) << nbits );		
-		cbit = 8;
-		if ( ++cbyte >= lbyte ) {
-			peof = nbits;
-			eof = true;
-			return retval;
-		}
-	}
-	
-	if ( nbits > 0 ) {		
-		retval |= ( MBITS( data[cbyte], cbit, (cbit-nbits) ) );
-		cbit -= nbits;		
-	}
-	
-	return retval;
-}
-
-/* -----------------------------------------------
-	reads one bit from abitreader
-	----------------------------------------------- */	
-	
-unsigned char abitreader::read_bit( void )
-{
-	unsigned char bit;
-	
-	// safety check for eof
-	if (eof) {
-		peof++;
-		return 0;
-	}
-	
-	// read one bit
-	bit = BITN( data[cbyte], --cbit );
-	if ( cbit == 0 ) {
-		if ( ++cbyte == lbyte ) eof = true;
-		cbit = 8;
-	} 
-	
-	return bit;
-}
-
-/* -----------------------------------------------
-	to skip padding from current byte
-	----------------------------------------------- */
-
-unsigned char abitreader::unpad( unsigned char fillbit )
-{
-	if ( ( cbit == 8 ) || eof ) return fillbit;
-	else {
-		fillbit = read( 1 );
-		while ( cbit != 8 ) read( 1 );
-	}
-	
-	return fillbit;
-}
-
-/* -----------------------------------------------
-	get current position in array
-	----------------------------------------------- */	
-
-int abitreader::getpos( void )
-{
-	return cbyte;
-}
-
-/* -----------------------------------------------
-	get current bit position
-	----------------------------------------------- */
-	
-int abitreader::getbitp( void )
-{
-	return cbit;
-}
-
-/* -----------------------------------------------
-	set byte and bit position
-	----------------------------------------------- */
-	
-void abitreader::setpos( int pbyte, int pbit )
-{
-	if ( pbyte < lbyte ) {
-		// reset eof
-		eof = false;
-		// set positions
-		cbyte = pbyte;
-		cbit = pbit;
-	} else {
-		// set eof
-		eof = true;
-		// set positions
-		cbyte = lbyte;
-		cbit = 8;
-		peof = ( ( pbyte - lbyte ) * 8 ) + 8 - pbit;
-	}	
-}
-
-/* -----------------------------------------------
-	rewind n bits
-	----------------------------------------------- */
-	
-void abitreader::rewind_bits( int nbits )
-{
-	if ( eof ) {
-		if ( nbits > peof ) nbits -= peof;
-		else {
-			peof -= nbits;
-			return;
-		}
-		eof = false;
-	}
-	for ( cbit += nbits; cbit > 8; cbyte--, cbit -= 8 );
-	if ( cbyte < 0 ) {
-		cbyte = 0;
-		cbit = 8;
-	}
-}
-
-
-/* -----------------------------------------------
-	constructor for abitwriter class
-	----------------------------------------------- */	
-
-abitwriter::abitwriter( int size )
-{
-	fillbit = 1;
-	adds    = 65536;
-	cbyte   = 0;
-	cbit    = 8;
-	
-	error = false;
-	fmem  = true;
-	
-	dsize = ( size > 0 ) ? size : adds;
-	data = ( unsigned char* ) malloc ( dsize );
-	if ( data == NULL ) {
-		error = true;
-		return;
-	}
-	
-	// fill buffer with zeroes
-	memset( data, 0, dsize * sizeof( char ) );
-	// for ( int i = 0; i < dsize; i++ ) data[i] = 0;
-}
-
-/* -----------------------------------------------
-	destructor for abitwriter class
-	----------------------------------------------- */	
-
-abitwriter::~abitwriter( void )
-{
-	// free memory if pointer was not given out
-	if ( fmem )	free( data );
-}
-
-/* -----------------------------------------------
-	writes n bits to abitwriter
-	----------------------------------------------- */	
-
-void abitwriter::write( unsigned int val, int nbits )
-{
-	// safety check for error
-	if ( error ) return;
-	
-	// test if pointer beyond flush treshold
-	if ( cbyte > ( dsize - 5 ) ) {
-		dsize += adds;
-		data = (unsigned char*) frealloc( data, dsize );
-		if ( data == NULL ) {
-			error = true;
-			return;
-		}
-		memset( ( data + cbyte + 1 ), 0, ( dsize - ( cbyte + 1 ) ) * sizeof( char ) );
-	}
-	
-	// write data
-	while ( nbits >= cbit ) {
-		data[cbyte] |= ( MBITS32(val, nbits, (nbits-cbit)) );		
-		nbits -= cbit;		
-		cbyte++;
-		cbit = 8;
-	}
-	
-	if ( nbits > 0 ) {		
-		data[cbyte] |= ( (RBITS32(val, nbits)) << (cbit - nbits) );
-		cbit -= nbits;		
-	}	
-}
-
-/* -----------------------------------------------
-	writes one bit to abitwriter
-	----------------------------------------------- */	
-
-void abitwriter::write_bit( unsigned char bit )
-{
-	// safety check for error
-	if ( error ) return;
-	
-	// write data
-	if ( bit ) data[cbyte] |= 0x1 << (--cbit);
-	else --cbit;
-	if ( cbit == 0 ) {
-		// test if pointer beyond flush treshold
-		if ( ++cbyte > ( dsize - 5 ) ) {
-			dsize += adds;
-			data = (unsigned char*) frealloc( data, dsize );
-			if ( data == NULL ) {
-				error = true;
-				return;
-			}
-			memset( ( data + cbyte + 1 ), 0, ( dsize - ( cbyte + 1 ) ) * sizeof( char ) );
-		}
-		cbit = 8;
-	} 
-}
-
-/* -----------------------------------------------
-	pads data using fillbit
-	----------------------------------------------- */
-	
-void abitwriter::pad( unsigned char fillbit )
-{
-	while ( cbit < 8 )
-		write( fillbit, 1 );
-}
-
-/* -----------------------------------------------
-	gets data array from abitwriter
-	----------------------------------------------- */	
-
-unsigned char* abitwriter::getptr( void )
-{
-	// data is padded here
-	pad( fillbit );
-	// forbid freeing memory
-	fmem = false;
-	// realloc data
-	data = (unsigned char*) frealloc( data, cbyte );
-	
-	return data;
-}
-
-/* -----------------------------------------------
-	gets size of data array from abitwriter
-	----------------------------------------------- */	
-
-int abitwriter::getpos( void )
-{
-	return cbyte;
-}
-
-/* -----------------------------------------------
-	get current bit position
-	----------------------------------------------- */
-	
-int abitwriter::getbitp( void )
-{
-	return cbit;
-}
-
-
-/* -----------------------------------------------
-	constructor for abytewriter class
-	----------------------------------------------- */
-
-abytereader::abytereader( unsigned char* array, int size )
-{
-	cbyte = 0;
-	eof = false;
-	
-	data = array;
-	lbyte = size;
-	
-	if ( ( data == NULL ) || ( lbyte == 0 ) )
-		eof = true;
-}
-
-/* -----------------------------------------------
-	destructor for abytewriter class
-	----------------------------------------------- */
-
-abytereader::~abytereader( void )
+    destructor for abitreader class
+   ----------------------------------------------- */
+abitreader::~abitreader()
 {
 }
 
 /* -----------------------------------------------
-	reads 1 byte from abytereader
-	----------------------------------------------- */
-
-int abytereader::read( unsigned char* byte )
+    reads n bits from abitreader
+   ----------------------------------------------- */
+unsigned int abitreader::read(int nbits)
 {
-	if ( cbyte >= lbyte ) {
-		cbyte = lbyte;
-		eof = true;
-		return 0;
-	}
-	else {
-		*byte = data[ cbyte++ ];
-		return 1;
-	}
+    unsigned int retval = 0;
+
+    // safety check for eof
+    if (eof()) {
+        peof_ += nbits;
+        return 0;
+    }
+
+    while (nbits >= cbit) {
+        nbits -= cbit;
+        retval |= (RBITS(data[cbyte], cbit) << nbits);
+        cbit = 8;
+        if (++cbyte >= lbyte) {
+            peof_ = nbits;
+            eof_ = true;
+            return retval;
+        }
+    }
+
+    if (nbits > 0) {
+        retval |= (MBITS(data[cbyte], cbit, (cbit - nbits)));
+        cbit -= nbits;
+    }
+
+    return retval;
 }
 
 /* -----------------------------------------------
-	reads n bytes from abytereader
-	----------------------------------------------- */
-	
-int abytereader::read_n( unsigned char* byte, int n )
+    reads one bit from abitreader
+   ----------------------------------------------- */
+unsigned char abitreader::read_bit()
 {
-	int nl = lbyte - cbyte;
-	int i;
-	
-	if ( nl < n ) {
-		for ( i = 0; i < nl; i++ )
-			byte[ i ] = data[ cbyte + i ];
-		cbyte = lbyte;
-		eof = true;
-		return nl;
-	}
-	else {
-		for ( i = 0; i < n; i++ )
-			byte[ i ] = data[ cbyte + i ];
-		cbyte += n;
-		return n;
-	}
+    unsigned char bit;
+
+    // safety check for eof
+    if (eof()) {
+        peof_++;
+        return 0;
+    }
+
+    // read one bit
+    bit = BITN(data[cbyte], --cbit);
+    if (cbit == 0) {
+        if (++cbyte == lbyte) eof_ = true;
+        cbit = 8;
+    }
+
+    return bit;
 }
 
 /* -----------------------------------------------
-	go to position in data
-	----------------------------------------------- */
-	
-void abytereader::seek( int pos )
+    to skip padding from current byte
+   ----------------------------------------------- */
+unsigned char abitreader::unpad(unsigned char fillbit)
 {
-	if ( pos >= lbyte ) {
-		cbyte = lbyte;
-		eof = true;
-	}
-	else {
-		cbyte = pos;
-		eof = false;
-	}
+    if ((cbit == 8) || eof()) return fillbit;
+    else {
+        fillbit = read(1);
+        while (cbit != 8) read(1);
+    }
+
+    return fillbit;
 }
 
 /* -----------------------------------------------
-	gets size of current data
-	----------------------------------------------- */
-	
-int abytereader::getsize( void )
+    get current position in array
+   ----------------------------------------------- */
+int abitreader::getpos()
 {
-	return lbyte;
+    return cbyte;
 }
 
 /* -----------------------------------------------
-	gets current position from abytereader
-	----------------------------------------------- */	
-
-int abytereader::getpos( void )
+    get current bit position
+   ----------------------------------------------- */
+int abitreader::getbitp()
 {
-	return cbyte;
+    return cbit;
 }
 
-
 /* -----------------------------------------------
-	constructor for abytewriter class
-	----------------------------------------------- */	
-
-abytewriter::abytewriter( int size )
+    set byte and bit position
+   ----------------------------------------------- */
+void abitreader::setpos(int pbyte, int pbit)
 {
-	adds  = 65536;
-	cbyte = 0;
-	
-	error = false;
-	fmem  = true;
-	
-	dsize = ( size > 0 ) ? size : adds;
-	data = (unsigned char*) malloc( dsize );
-	if ( data == NULL ) {
-		error = true;
-		return;
-	}
+    if (pbyte < lbyte) {
+        // reset eof
+        eof_ = false;
+        // set positions
+        cbyte = pbyte;
+        cbit = pbit;
+    }
+    else {
+        // set eof
+        eof_ = true;
+        // set positions
+        cbyte = lbyte;
+        cbit = 8;
+        peof_ = ((pbyte - lbyte) * 8) + 8 - pbit;
+    }
 }
 
 /* -----------------------------------------------
-	destructor for abytewriter class
-	----------------------------------------------- */	
-
-abytewriter::~abytewriter( void )
+    rewind n bits
+   ----------------------------------------------- */
+void abitreader::rewind_bits(int nbits)
 {
-	// free data if pointer is not read
-	if ( fmem )	free( data );
+    if (eof()) {
+        if (nbits > peof_) {
+            nbits -= peof_;
+            peof_ = 0;
+        }
+        else {
+            peof_ -= nbits;
+            return;
+        }
+        eof_ = false;
+    }
+
+    cbit += nbits;
+    cbyte -= cbit / 8;
+    cbit = cbit % 8;
+    if (cbyte < 0) {
+        cbyte = 0;
+        cbit = 8;
+    }
 }
 
-/* -----------------------------------------------
-	writes 1 byte to abytewriter
-	----------------------------------------------- */	
-
-void abytewriter::write( unsigned char byte )
+bool abitreader::eof()
 {
-	// safety check for error
-	if ( error ) return;
-	
-	// test if pointer beyond flush threshold
-	if ( cbyte >= ( dsize - 2 ) ) {
-		dsize += adds;
-		data = (unsigned char*) frealloc( data, dsize );
-		if ( data == NULL ) {
-			error = true;
-			return;
-		}
-	}
-	
-	// write data
-	data[ cbyte++ ] = byte;
+    return eof_;
 }
 
-/* -----------------------------------------------
-	writes n byte to abytewriter
-	----------------------------------------------- */
-	
-void abytewriter::write_n( unsigned char* byte, int n )
+int abitreader::peof()
 {
-	// safety check for error
-	if ( error ) return;
-	
-	// make sure that pointer doesn't get beyond flush threshold
-	while ( ( cbyte + n ) >= ( dsize - 2 ) ) {
-		dsize += adds;
-		data = (unsigned char*) frealloc( data, dsize );
-		if ( data == NULL ) {
-			error = true;
-			return;
-		}
-	}
-	
-	// copy data from array
-	while ( n-- > 0 )
-		data[ cbyte++ ] = *(byte++);
+    return peof_;
 }
 
-/* -----------------------------------------------
-	gets data array from abytewriter
-	----------------------------------------------- */
 
-unsigned char* abytewriter::getptr( void )
+/* -----------------------------------------------
+    constructor for abitwriter class
+   ----------------------------------------------- */
+abitwriter::abitwriter(int size)
 {
-	// safety check for error
-	if ( error ) return NULL;
-	// forbid freeing memory
-	fmem = false;
-	// realloc data
-	data = (unsigned char*) frealloc( data, cbyte );
-	
-	return data;
+    fillbit_ = 1;
+    cbyte = 0;
+    cbit = 8;
+
+    error_ = false;
+    fmem = true;
+
+    dsize = std::max(size, 65536);
+    data = (unsigned char*)calloc(dsize, sizeof(unsigned char));
+    if (data == nullptr) {
+        error_ = true;
+        return;
+    }
 }
 
 /* -----------------------------------------------
-	peeks into data array from abytewriter
-	----------------------------------------------- */
-	
-unsigned char* abytewriter::peekptr( void )
+    destructor for abitwriter class
+   ----------------------------------------------- */
+abitwriter::~abitwriter()
 {
-	return data;
+    // free memory if pointer was not given out
+    if (fmem) free(data);
 }
 
 /* -----------------------------------------------
-	gets size of data array from abytewriter
-	----------------------------------------------- */	
-
-int abytewriter::getpos( void )
+    writes n bits to abitwriter
+   ----------------------------------------------- */
+void abitwriter::write(unsigned int val, int nbits)
 {
-	return cbyte;
+    // safety check for error
+    if (error() || nbits < 0) return;
+
+    // test if pointer beyond flush treshold
+    if (cbyte > (dsize - 5)) {
+        data = frealloc(data, dsize * 2);
+        if (data == nullptr) {
+            error_ = true;
+            return;
+        }
+        dsize *= 2;
+        std::fill(data + cbyte + 1, data + dsize, static_cast<unsigned char>(0));
+    }
+
+    // write data
+    while (nbits >= cbit) {
+        data[cbyte] |= (MBITS32(val, nbits, (nbits - cbit)));
+        nbits -= cbit;
+        cbyte++;
+        cbit = 8;
+    }
+
+    if (nbits > 0) {
+        data[cbyte] |= ((RBITS32(val, nbits)) << (cbit - nbits));
+        cbit -= nbits;
+    }
 }
 
 /* -----------------------------------------------
-	reset without realloc
-	----------------------------------------------- */	
-	
-void abytewriter::reset( void )
+    writes one bit to abitwriter
+   ----------------------------------------------- */
+void abitwriter::write_bit(unsigned char bit)
 {
-	// set position of current byte
-	cbyte = 0;
+    // safety check for error
+    if (error()) return;
+
+    // write data
+    if (bit) data[cbyte] |= 0x1 << (--cbit);
+    else --cbit;
+    if (cbit == 0) {
+        // test if pointer beyond flush treshold
+        if (++cbyte > (dsize - 5)) {
+            data = frealloc(data, dsize * 2);
+            if (data == nullptr) {
+                error_ = true;
+                return;
+            }
+            dsize *= 2;
+            std::fill(data + cbyte + 1, data + dsize, static_cast<unsigned char>(0));
+        }
+        cbit = 8;
+    }
+}
+
+/* -----------------------------------------------
+    Sets the fillbit for padding data.
+   ----------------------------------------------- */
+void abitwriter::set_fillbit(unsigned char fillbit) {
+    fillbit_ = fillbit;
 }
 
 
 /* -----------------------------------------------
-	constructor for iostream class
-	----------------------------------------------- */
-
-iostream::iostream( void* src, int srctype, int srcsize, int iomode )
+    pads data using fillbit
+   ----------------------------------------------- */
+void abitwriter::pad()
 {
-	// locally copy source, source type # and io mode #
-	source = src;
-	srct   = srctype;
-	srcs   = srcsize;
-	mode   = iomode;
-	
-	// don't free memory when reading - this will be useful if switching occurs
-	free_mem_sw = false;
-	
-	// set binary mode for streams
-	#if defined( _WIN32 )				
-		setmode( fileno( stdin ), O_BINARY );
-		setmode( fileno( stdout ), O_BINARY );
-	#endif
-	
-	// open file/mem/stream
-	switch ( srct )
-	{
-		case 0:
-			open_file();
-			break;
-		
-		case 1:
-			open_mem();
-			break;
-		
-		case 2:
-			open_stream();
-			break;
-		
-		default:			
-			break;
-	}
+    while (cbit < 8)
+        write(fillbit_, 1);
 }
 
 /* -----------------------------------------------
-	destructor for iostream class
-	----------------------------------------------- */
-
-iostream::~iostream( void )
+    gets data array from abitwriter
+   ----------------------------------------------- */
+unsigned char* abitwriter::getptr()
 {
-	// if needed, write memory to stream or free memory from buffered stream
-	if ( srct == 2 ) {		
-		if ( mode == 1 ) {
-			if ( !(mwrt->error) ) {
-				srcs   = mwrt->getpos();
-				source = mwrt->getptr();
-				fwrite( source, sizeof( char ), srcs, stdout );
-			}
-		}
-	}
-	
-	// free all buffers
-	if ( srct == 0 ) {
-		if ( fptr != NULL ) {
-			if ( mode == 1 ) fflush( fptr );
-			fclose( fptr );
-		}
-	}
-	else if ( mode == 0 ) {
-		if ( free_mem_sw )
-			free( source );
-		delete( mrdr );
-	}
-	else
-		delete( mwrt );
+    // data is padded here
+    pad();
+    // forbid freeing memory
+    fmem = false;
+    // realloc data
+    data = frealloc(data, cbyte);
+
+    return data;
 }
 
 /* -----------------------------------------------
-	switches mode from reading to writing and vice versa
-	----------------------------------------------- */
-	
-void iostream::switch_mode( void )
-{	
-	// return immediately if there's an error
-	if ( chkerr() ) return;
-	
-	
-	if ( mode == 0 ) {
-		// WARNING: when switching from reading to writing, information might be lost forever
-		switch ( srct ) {
-			case 0:
-				fclose( fptr );
-				fptr = fopen( ( char* ) source, "wb" );
-				break;
-			case 1:
-			case 2:
-				delete( mrdr );
-				if ( free_mem_sw )
-					free( source ); // see? I've told you so :-)
-				mwrt = new abytewriter( srcs );
-				break;
-			default:
-				break;
-		}
-		mode = 1;
-	}
-	else {
-		// switching from writing to reading is a bit more complicated
-		switch ( srct ) {
-			case 0:
-				fflush( fptr );
-				fclose( fptr );
-				fptr = fopen( ( char* ) source, "rb" );
-				break;
-			case 1:
-			case 2:
-				source = mwrt->getptr();
-				srcs   = mwrt->getpos();
-				delete( mwrt );
-				mrdr = new abytereader( ( unsigned char* ) source, srcs );
-				free_mem_sw = true;
-				break;
-			default:
-				break;
-		}
-		mode = 0;
-	}
-}
-
-/* -----------------------------------------------
-	generic read function
-	----------------------------------------------- */
-	
-int iostream::read( void* to, int tpsize, int dtsize )
+    gets size of data array from abitwriter
+   ----------------------------------------------- */
+int abitwriter::getpos()
 {
-	return ( srct == 0 ) ? read_file( to, tpsize, dtsize ) : read_mem( to, tpsize, dtsize );
+    return cbyte;
 }
 
 /* -----------------------------------------------
-	generic write function
-	----------------------------------------------- */
-
-int iostream::write( void* from, int tpsize, int dtsize )
+    get current bit position
+   ----------------------------------------------- */
+int abitwriter::getbitp()
 {
-	return ( srct == 0 ) ? write_file( from, tpsize, dtsize ) : write_mem( from, tpsize, dtsize );
+    return cbit;
 }
 
-/* -----------------------------------------------
-	flush function 
-	----------------------------------------------- */
-
-int iostream::flush( void )
+bool abitwriter::error()
 {
-	if ( srct == 0 )
-		fflush( fptr );
-	
-	return getpos();
+    return error_;
 }
 
-/* -----------------------------------------------
-	rewind to beginning of stream
-	----------------------------------------------- */
 
-int iostream::rewind( void )
+/* -----------------------------------------------
+    constructor for abytewriter class
+   ----------------------------------------------- */
+abytereader::abytereader(unsigned char* array, int size)
 {
-	// WARNING: when writing, rewind might lose all your data
-	if ( srct == 0 )
-		fseek( fptr, 0, SEEK_SET );
-	else if ( mode == 0 )
-		mrdr->seek( 0 );
-	else
-		mwrt->reset();
-	
-	return getpos();
+    cbyte = 0;
+    _eof = false;
+
+    data = array;
+    lbyte = size;
+
+    if ((data == nullptr) || (lbyte == 0))
+        _eof = true;
 }
 
 /* -----------------------------------------------
-	get current position in stream
-	----------------------------------------------- */
-
-int iostream::getpos( void )
+    destructor for abytewriter class
+   ----------------------------------------------- */
+abytereader::~abytereader()
 {
-	int pos;
-	
-	if ( srct == 0 )
-		pos = ftell( fptr );
-	else if ( mode == 0 )
-		pos = mrdr->getpos();
-	else
-		pos = mwrt->getpos();
-
-	return pos;
 }
 
 /* -----------------------------------------------
-	get size of file
-	----------------------------------------------- */
-
-int iostream::getsize( void )
+    reads 1 byte from abytereader
+   ----------------------------------------------- */
+int abytereader::read(unsigned char* byte)
 {
-	int pos;
-	int siz;
-	
-	if ( mode == 0 ) {
-		if ( srct == 0 ) {
-			pos = ftell( fptr );
-			fseek( fptr, 0, SEEK_END );
-			siz = ftell( fptr );
-			fseek( fptr, pos, SEEK_SET );
-		}
-		else {
-			siz = mrdr->getsize();
-		}
-	}
-	else {
-		siz = getpos();
-	}
-
-	return siz;
+    if (cbyte >= lbyte) {
+        cbyte = lbyte;
+        _eof = true;
+        return 0;
+    }
+    else {
+        *byte = data[cbyte];
+        cbyte++;
+        _eof = cbyte >= lbyte;
+        return 1;
+    }
 }
 
 /* -----------------------------------------------
-	get data pointer (for mem io only)
-	----------------------------------------------- */
-
-unsigned char* iostream::getptr( void )
+    reads n bytes from abytereader
+   ----------------------------------------------- */
+int abytereader::read_n(unsigned char* byte, int n)
 {
-	if ( srct == 1 )
-		return ( mode == 0 ) ? ( unsigned char* ) source : mwrt->getptr();
-	else
-		return NULL;
+    if (n <= 0 || byte == nullptr) {
+        return 0;
+    }
+    int numAvailable = lbyte - cbyte;
+    int numRead = std::min(numAvailable, n);
+    std::copy(data + cbyte, data + cbyte + numRead, byte);
+    cbyte += numRead;
+    _eof = cbyte >= lbyte;
+    return numRead;
 }
 
 /* -----------------------------------------------
-	check for errors
-	----------------------------------------------- */
-	
-bool iostream::chkerr( void )
+    go to position in data
+   ----------------------------------------------- */
+void abytereader::seek(int pos)
 {
-	bool error = false;
-	
-	// check for user input errors
-	if ( ( mode != 0 ) && ( mode != 1 ) )
-		error = true;
-	if ( ( srct != 0 ) && ( srct != 1 ) && ( srct != 2 ) )
-		error = true;
-	
-	// check for io errors
-	if ( srct == 0 ) {
-		if ( fptr == NULL )
-			error = true;
-		else if ( ferror( fptr ) )
-			error = true;
-	}
-	else if ( mode == 0 ) {
-		if ( mrdr == NULL )			
-			error = true;
-	}
-	else {		
-		if ( mwrt == NULL )
-			error = true;
-		else if ( mwrt->error )
-			error = true;
-	}
-	
-	return error;
+    int newPos = std::max(pos, 0);
+    cbyte = std::min(newPos, lbyte);
+    _eof = cbyte >= lbyte;
 }
 
 /* -----------------------------------------------
-	check for eof (read only)
-	----------------------------------------------- */
-	
-bool iostream::chkeof( void )
+    gets size of current data
+   ----------------------------------------------- */
+int abytereader::getsize()
 {
-	if ( mode == 0 )
-		return ( srct == 0 ) ? feof( fptr ) : mrdr->eof;
-	else
-		return false;
+    return lbyte;
 }
 
 /* -----------------------------------------------
-	open function for files
-	----------------------------------------------- */
-
-void iostream::open_file( void )
+    gets current position from abytereader
+   ----------------------------------------------- */
+int abytereader::getpos()
 {
-	char* fn = (char*) source;
-	
-	// open file for reading / writing
-	fptr = fopen( fn, ( mode == 0 ) ? "rb" : "wb" );
+    return cbyte;
 }
 
-/* -----------------------------------------------
-	open function for memory
-	----------------------------------------------- */
-
-void iostream::open_mem( void )
+bool abytereader::eof()
 {
-	if ( mode == 0 )
-		mrdr = new abytereader( ( unsigned char* ) source, srcs );
-	else
-		mwrt = new abytewriter( srcs );
+    return _eof;
 }
 
-/* -----------------------------------------------
-	open function for streams
-	----------------------------------------------- */
-
-void iostream::open_stream( void )
-{	
-	abytewriter* strwrt;
-	unsigned char* buffer;
-	int i;
-	
-	if ( mode == 0 ) {
-		// read whole stream into memory buffer
-		strwrt = new abytewriter( 0 );
-		buffer = ( unsigned char* ) calloc( BUFFER_SIZE, sizeof( char ) );
-		if ( buffer != NULL ) {
-			while ( ( i = fread( buffer, sizeof( char ), BUFFER_SIZE, stdin ) ) > 0 )
-				strwrt->write_n( buffer, i );
-		}
-		if ( strwrt->error ) {
-			source = NULL;
-			srcs   = 0;
-		}
-		else {
-			source = strwrt->getptr();
-			srcs   = strwrt->getpos();
-		}
-		delete ( strwrt );
-		free( buffer );
-		// free memory after done
-		free_mem_sw = true;
-	}
-	
-	// for writing: simply open new stream in mem writer
-	// writing to stream will be done later
-	open_mem();
-}
 
 /* -----------------------------------------------
-	write function for files
-	----------------------------------------------- */
-
-int iostream::write_file( void* from, int tpsize, int dtsize )
+    constructor for abytewriter class
+   ----------------------------------------------- */
+abytewriter::abytewriter(int size)
 {
-	return fwrite( from, tpsize, dtsize, fptr );
+    cbyte = 0;
+
+    _error = false;
+    fmem = true;
+
+    dsize = std::max(size, 65536);
+    data = (unsigned char*)malloc(dsize);
+    if (data == nullptr) {
+        _error = true;
+    }
 }
 
 /* -----------------------------------------------
-	read function for files
-	----------------------------------------------- */
-
-int iostream::read_file( void* to, int tpsize, int dtsize )
+    destructor for abytewriter class
+   ----------------------------------------------- */
+abytewriter::~abytewriter()
 {
-	return fread( to, tpsize, dtsize, fptr );
+    // free data if pointer is not read
+    if (fmem) free(data);
 }
 
 /* -----------------------------------------------
-	write function for memory
-	----------------------------------------------- */
-	
-int iostream::write_mem( void* from, int tpsize, int dtsize )
+    writes 1 byte to abytewriter
+   ----------------------------------------------- */
+void abytewriter::write(unsigned char byte)
 {
-	int n = tpsize * dtsize;
-	
-	mwrt->write_n( ( unsigned char* ) from, n );
-	
-	return ( mwrt->error ) ? 0 : n;
+    // safety check for error
+    if (error()) return;
+
+    // test if pointer beyond flush threshold
+    if (cbyte >= dsize) {
+        data = frealloc(data, dsize * 2);
+        if (data == nullptr) {
+            _error = true;
+            return;
+        }
+        dsize *= 2;
+    }
+
+    // write data
+    data[cbyte] = byte;
+    cbyte++;
 }
 
 /* -----------------------------------------------
-	read function for memory
-	----------------------------------------------- */
-
-int iostream::read_mem( void* to, int tpsize, int dtsize )
+    writes n byte to abytewriter
+   ----------------------------------------------- */
+void abytewriter::write_n(const unsigned char* byte, int n)
 {
-	int n = tpsize * dtsize;
-	
-	return ( mrdr->read_n( ( unsigned char* ) to, n ) ) / tpsize;
+    // safety check for error
+    if (error() || n < 0) return;
+
+    // make sure that pointer doesn't get beyond flush threshold
+    while (cbyte + n >= dsize) {
+        data = frealloc(data, dsize * 2);
+        if (data == nullptr) {
+            _error = true;
+            return;
+        }
+        dsize *= 2;
+    }
+
+    std::copy(byte, byte + n, data + cbyte);
+    cbyte += n;
+}
+
+/* -----------------------------------------------
+    gets data array from abytewriter
+   ----------------------------------------------- */
+unsigned char* abytewriter::getptr()
+{
+    // safety check for error
+    if (error()) return nullptr;
+    // forbid freeing memory
+    fmem = false;
+    // realloc data
+    data = frealloc(data, cbyte);
+
+    return data;
+}
+
+/* -----------------------------------------------
+    peeks into data array from abytewriter
+   ----------------------------------------------- */
+unsigned char* abytewriter::peekptr()
+{
+    return data;
+}
+
+/* -----------------------------------------------
+    gets size of data array from abytewriter
+   ----------------------------------------------- */
+int abytewriter::getpos()
+{
+    return cbyte;
+}
+
+/* -----------------------------------------------
+    reset without realloc
+   ----------------------------------------------- */
+void abytewriter::reset()
+{
+    // set position of current byte
+    cbyte = 0;
+}
+
+bool abytewriter::error()
+{
+    return _error;
+}
+
+
+/* -----------------------------------------------
+    constructor for iostream class
+   ----------------------------------------------- */
+iostream::iostream(void* src, StreamType srctype, int srcsize, StreamMode iomode)
+{
+    // locally copy source, source type # and io mode #
+    source = src;
+    srct = srctype;
+    srcs = srcsize;
+    mode = iomode;
+
+    // don't free memory when reading - this will be useful if switching occurs
+    free_mem_sw = false;
+
+    // open file/mem/stream
+    switch (srct)
+    {
+    case StreamType::kFile:
+        open_file();
+        break;
+
+    case StreamType::kMemory:
+        open_mem();
+        break;
+
+    case StreamType::kStream:
+        // set binary mode for streams
+#if defined(_WIN32) || defined(WIN32)
+        _setmode(_fileno(stdin), _O_BINARY);
+        _setmode(_fileno(stdout), _O_BINARY);
+#endif
+        open_stream();
+        break;
+
+    default:
+        break;
+    }
+}
+
+/* -----------------------------------------------
+    destructor for iostream class
+   ----------------------------------------------- */
+iostream::~iostream()
+{
+    // if needed, write memory to stream or free memory from buffered stream
+    if (srct == StreamType::kStream) {
+        if (mode == StreamMode::kWrite) {
+            if (!(mwrt->error())) {
+                srcs = mwrt->getpos();
+                source = mwrt->getptr();
+                fwrite(source, sizeof(char), srcs, stdout);
+            }
+        }
+    }
+
+    // free all buffers
+    if (srct == StreamType::kFile) {
+        if (fptr != nullptr) {
+            if (mode == StreamMode::kWrite) fflush(fptr);
+            fclose(fptr);
+        }
+    }
+    else if (mode == StreamMode::kRead) {
+        if (free_mem_sw)
+            free(source);
+    }
+}
+
+/* -----------------------------------------------
+    switches mode from reading to writing and vice versa
+   ----------------------------------------------- */
+void iostream::switch_mode()
+{
+    // return immediately if there's an error
+    if (chkerr()) return;
+    
+    if (mode == StreamMode::kRead) {
+        // WARNING: when switching from reading to writing, information might be lost forever
+        switch (srct) {
+        case StreamType::kFile:
+            fclose(fptr);
+            fptr = fopen((char*)source, "wb");
+            break;
+        case StreamType::kMemory:
+        case StreamType::kStream:
+            mrdr.reset();
+            if (free_mem_sw)
+                free(source);
+            mwrt = std::make_unique<abytewriter>(srcs);
+            break;
+        default:
+            break;
+        }
+        mode = StreamMode::kWrite;
+    }
+    else {
+        // switching from writing to reading is a bit more complicated
+        switch (srct) {
+        case StreamType::kFile:
+            fflush(fptr);
+            fclose(fptr);
+            fptr = fopen((char*)source, "rb");
+            break;
+        case StreamType::kMemory:
+        case StreamType::kStream:
+            source = mwrt->getptr();
+            srcs = mwrt->getpos();
+            mwrt.reset();
+            mrdr = std::make_unique<abytereader>((unsigned char*)source, srcs);
+            free_mem_sw = true;
+            break;
+        default:
+            break;
+        }
+        mode = StreamMode::kRead;
+    }
+}
+
+/* -----------------------------------------------
+    generic read function
+   ----------------------------------------------- */
+int iostream::read(unsigned char* to, int dtsize)
+{
+    return (srct == StreamType::kFile) ? read_file(to, dtsize) : read_mem(to, dtsize);
+}
+
+bool iostream::read_byte(unsigned char* to) {
+    return  srct == StreamType::kFile ? read_file_byte(to) : read_mem_byte(to);
+}
+
+/* -----------------------------------------------
+    generic write function
+   ----------------------------------------------- */
+int iostream::write(const unsigned char* from, int dtsize)
+{
+    return (srct == StreamType::kFile) ? write_file(from, dtsize) : write_mem(from, dtsize);
+}
+
+int iostream::write_byte(unsigned char byte) {
+    return srct == StreamType::kFile ? write_file_byte(byte) : write_mem_byte(byte);
+}
+
+/* -----------------------------------------------
+    flush function
+   ----------------------------------------------- */
+int iostream::flush()
+{
+    if (srct == StreamType::kFile)
+        fflush(fptr);
+
+    return getpos();
+}
+
+/* -----------------------------------------------
+    rewind to beginning of stream
+   ----------------------------------------------- */
+int iostream::rewind()
+{
+    // WARNING: when writing, rewind might lose all your data
+    if (srct == StreamType::kFile)
+        fseek(fptr, 0, SEEK_SET);
+    else if (mode == StreamMode::kRead)
+        mrdr->seek(0);
+    else
+        mwrt->reset();
+
+    return getpos();
+}
+
+/* -----------------------------------------------
+    get current position in stream
+   ----------------------------------------------- */
+int iostream::getpos()
+{
+    int pos;
+
+    if (srct == StreamType::kFile)
+        pos = ftell(fptr);
+    else if (mode == StreamMode::kRead)
+        pos = mrdr->getpos();
+    else
+        pos = mwrt->getpos();
+
+    return pos;
+}
+
+/* -----------------------------------------------
+    get size of file
+   ----------------------------------------------- */
+int iostream::getsize()
+{
+    int siz;
+
+    if (mode == StreamMode::kRead) {
+        if (srct == StreamType::kFile) {
+            int pos = ftell(fptr);
+            fseek(fptr, 0, SEEK_END);
+            siz = ftell(fptr);
+            fseek(fptr, pos, SEEK_SET);
+        }
+        else {
+            siz = mrdr->getsize();
+        }
+    }
+    else {
+        siz = getpos();
+    }
+
+    return siz;
+}
+
+/* -----------------------------------------------
+    get data pointer (for mem io only)
+   ----------------------------------------------- */
+unsigned char* iostream::getptr()
+{
+    if (srct == StreamType::kMemory)
+        return (mode == StreamMode::kRead) ? (unsigned char*)source : mwrt->getptr();
+    else
+        return nullptr;
+}
+
+/* -----------------------------------------------
+    check for errors
+   ----------------------------------------------- */
+bool iostream::chkerr()
+{
+    bool error = false;
+
+    // check for io errors
+    if (srct == StreamType::kFile) {
+        if (fptr == nullptr)
+            error = true;
+        else if (ferror(fptr))
+            error = true;
+    }
+    else if (mode == StreamMode::kRead) {
+        if (mrdr == nullptr)
+            error = true;
+    }
+    else {
+        if (mwrt == nullptr)
+            error = true;
+        else if (mwrt->error())
+            error = true;
+    }
+
+    return error;
+}
+
+/* -----------------------------------------------
+    check for eof (read only)
+   ----------------------------------------------- */
+bool iostream::chkeof()
+{
+    if (mode == StreamMode::kRead)
+        return (srct == StreamType::kFile) ? feof(fptr) != 0 : mrdr->eof();
+    else
+        return false;
+}
+
+/* -----------------------------------------------
+    open function for files
+   ----------------------------------------------- */
+void iostream::open_file()
+{
+    char* fn = (char*)source;
+
+    // open file for reading / writing
+    fptr = fopen(fn, (mode == StreamMode::kRead) ? "rb" : "wb");
+    if (fptr != nullptr) {
+        file_buffer.reserve(32768);
+        std::setvbuf(fptr, file_buffer.data(), _IOFBF, file_buffer.capacity());
+    }
+}
+
+/* -----------------------------------------------
+    open function for memory
+   ----------------------------------------------- */
+void iostream::open_mem()
+{
+    if (mode == StreamMode::kRead)
+        mrdr = std::make_unique<abytereader>((unsigned char*)source, srcs);
+    else
+        mwrt = std::make_unique<abytewriter>(srcs);
+}
+
+/* -----------------------------------------------
+    open function for streams
+   ----------------------------------------------- */
+void iostream::open_stream()
+{
+    if (mode == StreamMode::kRead) {
+        // read whole stream into memory buffer
+        auto strwrt = std::make_unique<abytewriter>(0);
+        constexpr int buffer_capacity = 1024 * 1024;
+        std::vector<unsigned char> buffer(buffer_capacity);
+
+        int bytesRead = fread(buffer.data(), sizeof(buffer[0]), buffer_capacity, stdin);
+        while (bytesRead > 0) {
+            strwrt->write_n(buffer.data(), bytesRead);
+            bytesRead = fread(buffer.data(), sizeof(buffer[0]), buffer_capacity, stdin);
+        }
+        if (strwrt->error()) {
+            source = nullptr;
+            srcs = 0;
+        }
+        else {
+            source = strwrt->getptr();
+            srcs = strwrt->getpos();
+        }
+        // free memory after done
+        free_mem_sw = true;
+    }
+
+    // for writing: simply open new stream in mem writer
+    // writing to stream will be done later
+    open_mem();
+}
+
+/* -----------------------------------------------
+    write function for files
+   ----------------------------------------------- */
+int iostream::write_file(const unsigned char* from, int dtsize)
+{
+    return fwrite(from, sizeof(unsigned char), dtsize, fptr);
+}
+
+int iostream::write_file_byte(unsigned char byte) {
+    return fputc(byte, fptr) == byte;
+}
+
+/* -----------------------------------------------
+    read function for files
+   ----------------------------------------------- */
+int iostream::read_file(unsigned char* to, int dtsize)
+{
+    return fread(to, sizeof(unsigned char), dtsize, fptr);
+}
+
+bool iostream::read_file_byte(unsigned char* to) {
+    int val = fgetc(fptr);
+    *to = val;
+    return val != EOF;
+}
+
+/* -----------------------------------------------
+    write function for memory
+   ----------------------------------------------- */
+int iostream::write_mem(const unsigned char* from, int dtsize)
+{
+    mwrt->write_n(from, dtsize);
+
+    return (mwrt->error()) ? 0 : dtsize;
+}
+
+int iostream::write_mem_byte(unsigned char byte) {
+    mwrt->write(byte);
+    return mwrt->error() ? 0 : 1;
+}
+
+/* -----------------------------------------------
+    read function for memory
+   ----------------------------------------------- */
+int iostream::read_mem(unsigned char* to, int dtsize)
+{
+    return mrdr->read_n(to, dtsize);
+}
+
+bool iostream::read_mem_byte(unsigned char* to) {
+    return mrdr->read(to) == 1;
 }
