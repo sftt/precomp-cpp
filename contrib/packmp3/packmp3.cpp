@@ -469,7 +469,7 @@ EXPORT bool pmplib_convert_stream2stream( char* msg )
 EXPORT bool pmplib_convert_file2file( char* in, char* out, char* msg )
 {
 	// init streams
-	pmplib_init_streams( (void*) in, 0, 0, (void*) out, 0 );
+	pmplib_init_streams( (void*) in, kFile, 0, (void*) out, kFile );
 	
 	// process in main function
 	return pmplib_convert_stream2mem( NULL, NULL, msg ); 
@@ -558,7 +558,7 @@ EXPORT bool pmplib_convert_stream2mem( unsigned char** out_file, unsigned int* o
 	----------------------------------------------- */
 	
 #if defined(BUILD_LIB)
-EXPORT void pmplib_init_streams( void* in_src, int in_type, int in_size, void* out_dest, int out_type )
+EXPORT void pmplib_init_streams( void* in_src, StreamType in_type, int in_size, void* out_dest, StreamType out_type )
 {
 	/* a short reminder about input/output stream types:
 	
@@ -592,7 +592,7 @@ EXPORT void pmplib_init_streams( void* in_src, int in_type, int in_size, void* o
 	pmpfilesize = 0;
 	
 	// open input stream, check for errors
-	str_in = new iostream( in_src, in_type, in_size, 0 );
+	str_in = new iostream( in_src, in_type, in_size, kRead );
 	if ( str_in->chkerr() ) {
 		sprintf( errormessage, "error opening input stream" );
 		errorlevel = 2;
@@ -600,7 +600,7 @@ EXPORT void pmplib_init_streams( void* in_src, int in_type, int in_size, void* o
 	}	
 	
 	// open output stream, check for errors
-	str_out = new iostream( out_dest, out_type, 0, 1 );
+	str_out = new iostream( out_dest, out_type, 0, kWrite );
 	if ( str_out->chkerr() ) {
 		sprintf( errormessage, "error opening output stream" );
 		errorlevel = 2;
@@ -612,7 +612,7 @@ EXPORT void pmplib_init_streams( void* in_src, int in_type, int in_size, void* o
 	if ( pmpfilename != NULL ) free( pmpfilename ); pmpfilename = NULL;
 	
 	// check input stream
-	str_in->read( buffer, 1, 2 );
+	str_in->read( buffer, 2 );
 	str_in->rewind();
 	if ( (buffer[0] == pmp_magic[0]) && (buffer[1] == pmp_magic[1]) ) {
 		// file is PMP
@@ -1570,7 +1570,7 @@ INTERN bool read_mp3( void )
 		errorlevel = 2;
 		return false;
 	}
-	str_in->read( mp3data, 1, mp3filesize );
+	str_in->read( mp3data, mp3filesize );
 	
 	// find first proper mpeg audio frame
 	pos = mp3_seek_firstframe( mp3data, mp3filesize );
@@ -1603,7 +1603,7 @@ INTERN bool read_mp3( void )
 			errorlevel = 2;
 			return false;
 		}
-		str_in->read( mp3data + FIRST_FRAME_AREA, 1, mp3filesize - FIRST_FRAME_AREA );
+		str_in->read( mp3data + FIRST_FRAME_AREA, mp3filesize - FIRST_FRAME_AREA );
 	}
 	
 	
@@ -1729,19 +1729,19 @@ INTERN bool write_mp3( void )
 	
 	
 	// write data before (usually ID3v2 tag)
-	str_out->write( data_before, 1, data_before_size );
+	str_out->write( data_before, data_before_size );
 	
 	// write physical frames
 	// main data has to be in order!
 	for ( frame = firstframe; frame != NULL; frame = frame->next ) {
 		fixed = mp3_build_fixed( frame );
-		str_out->write( fixed, 1, frame->fixed_size );
-		str_out->write( data, 1, frame->frame_size - frame->fixed_size );
+		str_out->write( fixed, frame->fixed_size );
+		str_out->write( data, frame->frame_size - frame->fixed_size );
 		data += frame->frame_size - frame->fixed_size;
 	}
 	
 	// write data after
-	str_out->write( data_after, 1, data_after_size );
+	str_out->write( data_after, data_after_size );
 	
 	// errormessage if write error
 	if ( str_out->chkerr() ) {
@@ -1936,8 +1936,8 @@ INTERN bool compress_mp3( void )
 	// --- write PMP header with some basic info ---
 	
 	// PMP magic number & version byte
-	str_out->write( (void*) pmp_magic, 1, 2 );
-	str_out->write( (void*) &appversion, 1, 1 );
+	str_out->write( (const unsigned char*) pmp_magic, 2 );
+	str_out->write( &appversion, 1 );
 	
 	// PMP header data
 	if ( !pmp_write_header( str_out ) ) return false;
@@ -1967,7 +1967,7 @@ INTERN bool compress_mp3( void )
 	// --- actual compressed data writing starts here ---
 	
 	// init arithmetic compression
-	encoder = new aricoder( str_out, 1 );
+	encoder = new aricoder( str_out, kWrite );
 	
 	#if !defined( STORE_ID3 )
 	// id3 tags / other tags / garbage
@@ -2041,11 +2041,11 @@ INTERN bool uncompress_pmp( void )
 	
 	// PMP magic number
 	// skip 2 bytes (no need to check again)
-	str_in->read( &hcode, 1, 1 );
-	str_in->read( &hcode, 1, 1 );
+	str_in->read( &hcode, 1 );
+	str_in->read( &hcode, 1 );
 	
 	// version number
-	str_in->read( &hcode, 1, 1 );
+	str_in->read( &hcode, 1 );
 	// compare version number
 	if ( hcode != appversion ) {
 		sprintf( errormessage, "incompatible file, use %s v%i.%i",
@@ -2084,7 +2084,7 @@ INTERN bool uncompress_pmp( void )
 	// --- actual decompression starts here ---
 	
 	// init arithmetic decompression
-	decoder = new aricoder( str_in, 0 );
+	decoder = new aricoder( str_in, kRead );
 	
 	#if !defined( STORE_ID3 )
 	// id3 tags / other tags / garbage
@@ -3101,8 +3101,8 @@ INTERN inline bool pmp_write_header( iostream* str )
 	nframes[3] = ( g_nframes >>  0 ) & 0xFF;
 	
 	// 8 bytes to write, together with magic # and version: 11 bytes
-	str->write( (void*) header, 1, 4 );
-	str->write( (void*) nframes, 1, 4 );
+	str->write( header, 4 );
+	str->write( nframes, 4 );
 	
 		
 	return true;
@@ -3122,8 +3122,8 @@ INTERN inline bool pmp_read_header( iostream* str )
 	
 	
 	// read header and size from file
-	str->read( (void*) header, 1, 4 );
-	str->read( (void*) nframes, 1, 4 );
+	str->read( header, 4 );
+	str->read( nframes, 4 );
 	if ( str->chkeof() ) {
 		sprintf( errormessage, "unexpected end of data" );
 		errorlevel = 2;
@@ -3261,7 +3261,7 @@ INTERN bool pmp_decode_id3( aricoder* dec )
 			bwrt->write( (unsigned char) c );
 		}	
 		// check for out of memory
-		if ( bwrt->error ) {
+		if ( bwrt->error() ) {
 			delete bwrt; delete model;
 			sprintf( errormessage, MEM_ERRMSG );
 			errorlevel = 2;
@@ -3282,7 +3282,7 @@ INTERN bool pmp_decode_id3( aricoder* dec )
 			bwrt->write( (unsigned char) c );
 		}	
 		// check for out of memory
-		if ( bwrt->error ) {
+		if ( bwrt->error() ) {
 			delete bwrt; delete model;
 			sprintf( errormessage, MEM_ERRMSG );
 			errorlevel = 2;
@@ -3720,7 +3720,7 @@ INTERN inline bool pmp_encode_slength( aricoder* enc )
 	// encoding start
 	for ( ch = 0; ch < g_nchannels; ch++ ) {
 		// reset and flush model
-		model->flush_model( 1 );
+		model->flush_model();
 		gg_ctx = gg_context[ ch ]; c = 0;
 		// encode one channel
 		for ( granule = firstframe->granules[ch][0]; granule != NULL; granule = granule->next ) {
@@ -3756,7 +3756,7 @@ INTERN inline bool pmp_decode_slength( aricoder* dec )
 	// decoding start
 	for ( ch = 0; ch < g_nchannels; ch++ ) {
 		// reset and flush model
-		model->flush_model( 1 );
+		model->flush_model();
 		gg_ctx = gg_context[ ch ]; c = 0;
 		// decode one channel
 		for ( granule = firstframe->granules[ch][0]; granule != NULL; granule = granule->next ) {
@@ -3880,9 +3880,9 @@ INTERN inline bool pmp_encode_region_data( aricoder* enc )
 	// encoding start
 	for ( ch = 0; ch < g_nchannels; ch++ ) {
 		// reset and flush models
-		mod_s0->flush_model( 1 );
-		mod_s1->flush_model( 1 );
-		mod_bv->flush_model( 1 );
+		mod_s0->flush_model();
+		mod_s1->flush_model();
+		mod_bv->flush_model();
 		// reset context
 		gg_ctx = gg_context[ ch ]; ctx_sv = 0;
 		t_r0 = 0; t_r1 = 0; t_r2 = 0; t_sv = 0;
@@ -3990,9 +3990,9 @@ INTERN inline bool pmp_decode_region_data( aricoder* dec )
 	// decoding start
 	for ( ch = 0; ch < g_nchannels; ch++ ) {
 		// reset and flush model
-		mod_s0->flush_model( 1 );
-		mod_s1->flush_model( 1 );
-		mod_bv->flush_model( 1 );
+		mod_s0->flush_model();
+		mod_s1->flush_model();
+		mod_bv->flush_model();
 		// reset context
 		gg_ctx = gg_context[ ch ]; ctx_sv = 0;
 		t_r0 = 0; t_r1 = 0; t_r2 = 0; t_sv = 0;
@@ -4121,7 +4121,7 @@ INTERN inline bool pmp_encode_sharing( aricoder* enc )
 	// encoding start
 	for ( ch = 0; ch < g_nchannels; ch++ ) {
 		// reset and flush model
-		model->flush_model( 1 );
+		model->flush_model();
 		c = 0;
 		// encode one channel
 		for ( granule = firstframe->granules[ch][0]; granule != NULL; granule = granule->next->next ) {
@@ -4156,7 +4156,7 @@ INTERN inline bool pmp_decode_sharing( aricoder* dec )
 	// decoding start
 	for ( ch = 0; ch < g_nchannels; ch++ ) {
 		// reset and flush model
-		model->flush_model( 1 );
+		model->flush_model();
 		c = 0;
 		// decode one channel
 		for ( granule = firstframe->granules[ch][0]; granule != NULL; granule = granule->next->next ) {
@@ -4199,7 +4199,7 @@ INTERN inline bool pmp_encode_preemphasis( aricoder* enc )
 	// encoding start
 	for ( ch = 0; ch < g_nchannels; ch++ ) {
 		// reset and flush model
-		model->flush_model( 1 );
+		model->flush_model();
 		ctx = 0;
 		// encode one channel
 		for ( granule = firstframe->granules[ch][0]; granule != NULL; granule = granule->next ) {
@@ -4236,7 +4236,7 @@ INTERN inline bool pmp_decode_preemphasis( aricoder* dec )
 	// decoding start
 	for ( ch = 0; ch < g_nchannels; ch++ ) {
 		// reset and flush model
-		model->flush_model( 1 );
+		model->flush_model();
 		ctx = 0;
 		// decode one channel
 		for ( granule = firstframe->granules[ch][0]; granule != NULL; granule = granule->next ) {
@@ -4280,7 +4280,7 @@ INTERN inline bool pmp_encode_coarse_sf( aricoder* enc )
 	// encoding start
 	for ( ch = 0; ch < g_nchannels; ch++ ) {
 		// reset and flush model
-		model->flush_model( 1 );
+		model->flush_model();
 		ctx = 0;
 		// encode one channel
 		for ( granule = firstframe->granules[ch][0]; granule != NULL; granule = granule->next ) {
@@ -4317,7 +4317,7 @@ INTERN inline bool pmp_decode_coarse_sf( aricoder* dec )
 	// decoding start
 	for ( ch = 0; ch < g_nchannels; ch++ ) {
 		// reset and flush model
-		model->flush_model( 1 );
+		model->flush_model();
 		ctx = 0;
 		// decode one channel
 		for ( granule = firstframe->granules[ch][0]; granule != NULL; granule = granule->next ) {
@@ -5754,7 +5754,7 @@ INTERN inline bool pmp_decode_main_data( aricoder* dec )
 INTERN inline bool pmp_store_unmute_data( iostream* str )
 {
 	// as simple as it gets...
-	str->write( unmute_data, sizeof( char ), unmute_data_size );
+	str->write( unmute_data, unmute_data_size );
 	
 	return true;
 }
@@ -5768,7 +5768,7 @@ INTERN inline bool pmp_unstore_unmute_data( iostream* str )
 	unsigned char n;
 	
 	// read # of of muted frames, set data size
-	str->read( &n, sizeof( char ), 1 );
+	str->read( &n, 1 );
 	if ( str->chkeof() ) n = 0;
 	unmute_data_size = 1 + n * ( 2 + ( g_nchannels * 2 * 4 ) );
 	
@@ -5782,7 +5782,7 @@ INTERN inline bool pmp_unstore_unmute_data( iostream* str )
 	
 	// read unmute data
 	*unmute_data = n;
-	str->read( unmute_data + 1, sizeof( char ), unmute_data_size - 1 );
+	str->read( unmute_data + 1, unmute_data_size - 1 );
 	
 	// check for eof
 	if ( str->chkeof() ) {

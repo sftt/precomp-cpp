@@ -5,6 +5,8 @@
 	#define EXPORT extern
 #endif
 
+#include "../packjpg/bitops.h"
+
 /* -----------------------------------------------
 	function declarations: library only functions
 	----------------------------------------------- */
@@ -12,7 +14,7 @@
 EXPORT bool pmplib_convert_stream2stream( char* msg );
 EXPORT bool pmplib_convert_file2file( char* in, char* out, char* msg );
 EXPORT bool pmplib_convert_stream2mem( unsigned char** out_file, unsigned int* out_size, char* msg );
-EXPORT void pmplib_init_streams( void* in_src, int in_type, int in_size, void* out_dest, int out_type );
+EXPORT void pmplib_init_streams( void* in_src, StreamType in_type, int in_size, void* out_dest, StreamType out_type );
 EXPORT const char* pmplib_version_info( void );
 EXPORT const char* pmplib_short_name( void );
 

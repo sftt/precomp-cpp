@@ -5454,7 +5454,7 @@ while (fin_pos < fin_length) {
 
         fast_copy(fin, mp3_mem_in, decompressed_data_length);
 
-        pmplib_init_streams(mp3_mem_in, 1, decompressed_data_length, mp3_mem_out, 1);
+        pmplib_init_streams(mp3_mem_in, kMemory, decompressed_data_length, mp3_mem_out, kMemory);
         recompress_success = pmplib_convert_stream2mem(&mp3_mem_out, &mp3_mem_out_size, recompress_msg);
       } else {
         remove(tempfile1);
@@ -7624,7 +7624,7 @@ void try_decompression_mp3 (long long mp3_length) {
           seek_64(fin, input_file_pos);
           fast_copy(fin, mp3_mem_in, mp3_length);
                     
-          pmplib_init_streams(mp3_mem_in, 1, mp3_length, mp3_mem_out, 1);
+          pmplib_init_streams(mp3_mem_in, kMemory, mp3_length, mp3_mem_out, kMemory);
           recompress_success = pmplib_convert_stream2mem(&mp3_mem_out, &mp3_mem_out_size, recompress_msg);
         } else { // large stream => use temporary files
           // try to decompress at current position
@@ -7651,7 +7651,7 @@ void try_decompression_mp3 (long long mp3_length) {
               if (DEBUG_MODE) printf ("Too much garbage data at the end, retry with new length %i\n", pos);
               
               if (in_memory) {
-                pmplib_init_streams(mp3_mem_in, 1, mp3_length, mp3_mem_out, 1);
+                pmplib_init_streams(mp3_mem_in, kMemory, mp3_length, mp3_mem_out, kMemory);
                 recompress_success = pmplib_convert_stream2mem(&mp3_mem_out, &mp3_mem_out_size, recompress_msg);
               } else {
                 fmp3 = tryOpen(tempfile0, "r+b");
