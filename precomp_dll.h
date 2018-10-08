@@ -82,4 +82,6 @@ Switches::Switches() {
 
 DLL void get_copyright_msg(char* msg);
 DLL bool precompress_file(char* in_file, char* out_file, char* msg, Switches switches);
+DLL bool precompress_f(char* in_file, FILE *fout, char* msg, Switches switches);
 DLL bool recompress_file(char* in_file, char* out_file, char* msg, Switches switches);
+DLL bool recompress_f(FILE *fin, char* out_file, char* msg, Switches switches);

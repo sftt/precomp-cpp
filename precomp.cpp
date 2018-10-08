@@ -130,6 +130,7 @@ char tempfile3[19] = "~temp000000003.dat";
 char* tempfilelist;
 int tempfilelist_count = 0;
 int tempfile_instance = 0;
+FILE* ftempout = NULL;
 
 #include "precomp.h"
 
@@ -171,7 +172,7 @@ bz_stream otf_bz2_stream_c, otf_bz2_stream_d;
 
 FILE* fin = NULL;
 FILE* fout = NULL;
-FILE* ftempout = NULL;
+FILE* foutdll = NULL;
 FILE* frecomp = NULL;
 FILE* fdecomp = NULL;
 FILE* fpack = NULL;
@@ -337,9 +338,9 @@ enum {
 // msg = Buffer for error messages (256 bytes buffer size are enough)
 DLL void get_copyright_msg(char* msg) {
   if (V_MINOR2 == 0) {
-    sprintf(msg, "Precomp DLL v%i.%i (c) 2006-2018 by Christian Schneider",V_MAJOR,V_MINOR);
+    sprintf(msg, "Precomp DLL v%i.%i %s %s %s (c) 2006-2018 by Christian Schneider",V_MAJOR,V_MINOR,V_OS,V_BIT,V_STATE);
   } else {
-    sprintf(msg, "Precomp DLL v%i.%i.%i (c) 2006-2018 by Christian Schneider",V_MAJOR,V_MINOR,V_MINOR2);
+    sprintf(msg, "Precomp DLL v%i.%i.%i %s %s %s (c) 2006-2018 by Christian Schneider",V_MAJOR,V_MINOR,V_MINOR2,V_OS,V_BIT,V_STATE);
   }
 }
 
@@ -430,11 +431,60 @@ DLL bool precompress_file(char* in_file, char* out_file, char* msg, Switches swi
   return true;
 }
 
+// precompress a file
+// in_file = input filename
+// out_file = output filename
+// msg = Buffer for error messages (256 bytes buffer size are enough)
+DLL bool precompress_f(char* in_file, FILE *ftmp, char* msg, Switches switches) {
+
+    // init compression and memory level count
+    for (int i = 0; i < 81; i++) {
+        comp_mem_level_count[i] = 0;
+        zlib_level_was_used[i] = false;
+    }
+
+    fin_length = fileSize64(in_file);
+
+    fin = fopen(in_file, "rb");
+    if (fin == NULL) {
+        sprintf(msg, "ERROR: Input file \"%s\" doesn't exist", in_file);
+
+        return false;
+    }
+
+    fout = foutdll = ftmp;
+    if (fout == NULL) {
+        sprintf(msg, "ERROR: Can't use NULL output file");
+
+        return false;
+    }
+
+    setSwitches(switches);
+
+    input_file_name = new char[strlen(in_file) + 1];
+    strcpy(input_file_name, in_file);
+    //output_file_name = new char[strlen(out_file) + 1];
+    //strcpy(output_file_name, out_file);
+    output_file_name = new char[strlen("T") + 1];
+    strcpy(output_file_name, "T");
+
+    start_time = get_time_ms();
+
+    penalty_bytes = new char[MAX_PENALTY_BYTES];
+    local_penalty_bytes = new char[MAX_PENALTY_BYTES];
+    best_penalty_bytes = new char[MAX_PENALTY_BYTES];
+
+    compress_file();
+    foutdll = NULL;
+    return true;
+}
+
 // recompress a file
 // in_file = input filename
 // out_file = output filename
 // msg = Buffer for error messages (256 bytes buffer size are enough)
 DLL bool recompress_file(char* in_file, char* out_file, char* msg, Switches switches) {
+    otf_xz_stream_d = LZMA_STREAM_INIT;
 
   // init compression and memory level count
   for (int i = 0; i < 81; i++) {
@@ -474,6 +524,60 @@ DLL bool recompress_file(char* in_file, char* out_file, char* msg, Switches swit
   decompress_file();
 
   return true;
+}
+
+// recompress a file
+// in_file = input filename
+// out_file = output filename
+// msg = Buffer for error messages (256 bytes buffer size are enough)
+DLL bool recompress_f(FILE *ftmp, char* out_file, char* msg, Switches switches) {
+    otf_xz_stream_d = LZMA_STREAM_INIT;
+
+    // init compression and memory level count
+    for (int i = 0; i < 81; i++) {
+        comp_mem_level_count[i] = 0;
+        zlib_level_was_used[i] = false;
+    }
+
+    //fin_length = fileSize64(in_file);
+    fin = ftmp;
+    if (fin == NULL) {
+        sprintf(msg, "ERROR: Input file doesn't exist");
+
+        return false;
+    }
+
+    if (fin == NULL) return false;
+    fseek(fin, 0, SEEK_END);
+    fin_length = ftell(fin);
+    //fseeko(fin, 0, SEEK_SET);
+    rewind(fin);
+
+    fout = fopen(out_file, "wb");
+    if (fout == NULL) {
+        sprintf(msg, "ERROR: Can't create output file \"%s\"", out_file);
+
+        return false;
+    }
+
+    setSwitches(switches);
+
+    //input_file_name = new char[strlen(in_file) + 1];
+    //strcpy(input_file_name, in_file);
+    input_file_name = new char[strlen("T") + 1];
+    strcpy(input_file_name, "T");
+    output_file_name = new char[strlen(out_file) + 1];
+    strcpy(output_file_name, out_file);
+
+    start_time = get_time_ms();
+
+    penalty_bytes = new char[MAX_PENALTY_BYTES];
+    local_penalty_bytes = new char[MAX_PENALTY_BYTES];
+    best_penalty_bytes = new char[MAX_PENALTY_BYTES];
+
+    decompress_file();
+
+    return true;
 }
 
 // test if a file contains streams that can be precompressed
@@ -726,7 +830,8 @@ int init(int argc, char* argv[]) {
               if (lzma_max_memory_set) {
                 error(ERR_ONLY_SET_LZMA_MEMORY_ONCE);
               }
-              compression_otf_max_memory = parseIntUntilEnd(argv[i] + 3, "LZMA maximal memory");
+              compression_otf_max_memory = (argv[i][3] == '\0') ? -1 :
+                parseIntUntilEnd(argv[i] + 3, "LZMA maximal memory");
               lzma_max_memory_set = true;
             } else if (toupper(argv[i][2]) == 'T') { // LZMA thread count
               if (lzma_thread_count_set) {
@@ -734,6 +839,12 @@ int init(int argc, char* argv[]) {
               }
               compression_otf_thread_count = parseIntUntilEnd(argv[i] + 3, "LZMA thread count");
               lzma_thread_count_set = true;
+            } else if (toupper(argv[i][2]) == 'N') { // LZMA nice length
+              otf_xz_extra_params.nice_len = parseIntUntilEnd(argv[i] + 3, "LZMA nice length");
+              if (otf_xz_extra_params.nice_len > 273) {
+                printf("LZMA nice length must not greater than 273\n");
+                exit(1);
+              }
             } else if (toupper(argv[i][2]) == 'L') {
               if (toupper(argv[i][3]) == 'C') {
                 otf_xz_extra_params.lc = 1 + parseIntUntilEnd(argv[i] + 4, "LZMA literal context bits");
@@ -1172,7 +1283,8 @@ int init(int argc, char* argv[]) {
     printf("  o[filename]  Write output to [filename] <[input_file].pcf or file in header>\n");
     printf("  e            preserve original extension of input name for output name <off>\n");
     printf("  c[lbn]       Compression method to use, l = lzma2, b = bZip2, n = none <l>\n");
-    printf("  lm[amount]   Set maximal LZMA memory in MiB <%i>\n", lzma_max_memory_default());
+    printf("  n[lbn]       Convert a PCF file to this compression (same as above) <off>\n\n");
+    printf("  lm[amount]   Set maximal LZMA memory in MiB, \"-lm \" for unlimited <%i>\n", lzma_max_memory_default());
     printf("  lt[count]    Set LZMA thread count <auto-detect: %i>\n", auto_detected_thread_count());
     if (long_help) {
       printf("  lf[+-][xpiatsd] Set LZMA filters (up to %d of them can be combined) <none>\n",
@@ -1181,15 +1293,15 @@ int init(int argc, char* argv[]) {
       printf("                  X = x86, P = PowerPC, I = IA-64, A = ARM, T = ARM-Thumb\n");
       printf("                  S = SPARC, D = delta (must be followed by distance %d..%d)\n",
                                 LZMA_DELTA_DIST_MIN, LZMA_DELTA_DIST_MAX);
+      printf("  ln[length]   Set LZMA nice length of a match (%d max) <%d>\n", 273, 64);
       printf("  llc[bits]    Set LZMA literal context bits <%d>\n", LZMA_LC_DEFAULT);
       printf("  llp[bits]    Set LZMA literal position bits <%d>\n", LZMA_LP_DEFAULT);
       printf("               The sum of lc and lp must be inside %d..%d\n", LZMA_LCLP_MIN, LZMA_LCLP_MAX);
-      printf("  lpb[bits]    Set LZMA position bits, must be inside %d..%d <%d>\n", 
+      printf("  lpb[bits]    Set LZMA position bits, must be inside %d..%d <%d>\n\n", 
                             LZMA_PB_MIN, LZMA_PB_MAX, LZMA_PB_DEFAULT);
     } else {
-      printf("  lf[+-][xpiatsd] Set LZMA filters (up to 3, see long help for details) <none>\n");
+      printf("  lf[+-][xpiatsd] Set LZMA filters (up to 3, see long help for details) <none>\n\n");
     }
-    printf("  n[lbn]       Convert a PCF file to this compression (same as above) <off>\n");
     printf("  v            Verbose (debug) mode <off>\n");
     printf("  d[depth]     Set maximal recursion depth <10>\n");
     //printf("  zl[1..9][1..9] zLib levels to try for compression (comma separated) <all>\n");
@@ -2276,7 +2388,8 @@ void denit_compress() {
   }
 
   safe_fclose(&fin);
-  safe_fclose(&fout);
+  if (fout != foutdll)
+    safe_fclose(&fout);
 
   if ((recursion_depth == 0) && (!DEBUG_MODE) && show_lzma_progress && (old_lzma_progress_text_length > -1)) {
     printf("%s", string(old_lzma_progress_text_length, '\b').c_str()); // backspaces to remove old lzma progress text
@@ -2421,7 +2534,8 @@ void denit_convert() {
 
 void denit() {
   safe_fclose(&fin);
-  safe_fclose(&fout);
+  if (fout != foutdll)
+    safe_fclose(&fout);
 }
 
 // Brute mode detects a bit less than intense mode to avoid false positives
@@ -5270,6 +5384,7 @@ void write_header() {
 
   // write input file name without path
   char* last_backslash = strrchr(input_file_name, PATH_DELIM);
+  if (last_backslash == NULL) last_backslash = strrchr(input_file_name, '/');
   if (last_backslash != NULL) {
     strcpy(input_file_name_without_path, last_backslash + 1);
   } else {

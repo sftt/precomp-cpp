@@ -14,7 +14,7 @@ struct lzma_init_mt_extra_parameters {
   
   int filter_delta_distance;
 
-  int lc, lp, pb;
+  int lc, lp, pb, nice_len;
 };
 
 bool init_encoder_mt(lzma_stream *strm, int threads, uint64_t max_memory, 

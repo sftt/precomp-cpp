@@ -98,13 +98,12 @@ bool init_encoder_mt(lzma_stream *strm, int threads, uint64_t max_memory,
 
   mt.threads = threads;
 
-  uint64_t preset_memory_usage;
+  lzma_options_lzma opt_lzma2;
   int preset_to_use = 1; // Always use at least preset 1, even if it exceeds the given memory limit
-  for (int preset = 2; preset <= 9; preset++) {
-    lzma_options_lzma opt_lzma2;
+  for (int preset = 9; preset >= 1; preset--) {
     if (lzma_lzma_preset(&opt_lzma2, preset)) {
-      fprintf(stderr, "Unsupported preset, possibly a bug\n");
-      return false;
+      fprintf(stderr, "Unsupported preset %d, possibly a bug\n", preset);
+      continue;
     }
 
     lzma_filter filterLzma2;
@@ -120,16 +119,11 @@ bool init_encoder_mt(lzma_stream *strm, int threads, uint64_t max_memory,
 
     mt.filters = filters;
 
-    preset_memory_usage = lzma_stream_encoder_mt_memusage(&mt, &block_size);
-    if (preset_memory_usage > max_memory) break;
-    memory_usage = preset_memory_usage;
-    preset_to_use = preset;
-  }
-
-  lzma_options_lzma opt_lzma2;
-  if (lzma_lzma_preset(&opt_lzma2, preset_to_use)) {
-    fprintf(stderr, "Unsupported preset, possibly a bug\n");
-    return false;
+    memory_usage = lzma_stream_encoder_mt_memusage(&mt, &block_size);
+    if (memory_usage <= max_memory || 0 == max_memory || 1 == preset) {
+      preset_to_use = preset;
+      break;
+    }
   }
 
   if (extra_params.lc > 0) {
@@ -141,6 +135,18 @@ bool init_encoder_mt(lzma_stream *strm, int threads, uint64_t max_memory,
   if (extra_params.pb > 0) {
     opt_lzma2.pb = extra_params.pb - 1;
   }
+  if (extra_params.nice_len > 0) {
+    opt_lzma2.nice_len = extra_params.nice_len;
+    if (opt_lzma2.nice_len < (uint8_t)(0xf & opt_lzma2.mf)) {
+        opt_lzma2.nice_len = (opt_lzma2.mf & 0xf);
+    }
+  }
+  printf("preset=%d, dict=%dMiB, mode=%s, nice=%d, mf=%s%d, depth=%d, lc/lp/pb = %d/%d/%d\n",//, %d%s
+    preset_to_use, opt_lzma2.dict_size/1048576, LZMA_MODE_FAST == opt_lzma2.mode ? "fast" : "normal",
+    opt_lzma2.nice_len, 0x10 == (0x10 & opt_lzma2.mf) ? "bt" : "hc", opt_lzma2.mf & 0xf,
+    opt_lzma2.depth, opt_lzma2.lc, opt_lzma2.lp, opt_lzma2.pb);//, filter_count, (0<filter_count)?" filter(s)":"");
+  //printf("LZMA2: mode %d, lc/lp/pb = %d/%d/%d, mf=%d, dict=%d, nice=%d\n", opt_lzma2.mode,
+    //opt_lzma2.lc, opt_lzma2.lp, opt_lzma2.pb, opt_lzma2.mf, opt_lzma2.dict_size, opt_lzma2.nice_len);
 
   lzma_filter filterLzma2;
   filterLzma2.id = LZMA_FILTER_LZMA2;
